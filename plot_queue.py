@@ -71,6 +71,6 @@ plt.xlabel("Seconds")
 
 if args.out:
     print('saving to', args.out)
-    plt.savefig(args.out)
+    plt.savefig(args.out, bbox_inches='tight')
 else:
     plt.show()

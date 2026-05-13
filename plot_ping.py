@@ -56,9 +56,10 @@ for i, f in enumerate(args.files):
     ax.xaxis.set_major_locator(MaxNLocator(4))
 
 plt.ylabel("RTT (ms)")
+plt.xlabel("Seconds")
 plt.grid(True)
 
 if args.out:
-    plt.savefig(args.out)
+    plt.savefig(args.out, bbox_inches='tight')
 else:
     plt.show()
