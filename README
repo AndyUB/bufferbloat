@@ -1,8 +1,117 @@
-Instructions to reproduce the results:
-  TODO
+CSE 550 Problem Set 2 — Bufferbloat
+====================================
 
-Answers to the questions:
-  1. TODO
-  2. TODO
-  3. TODO
-  4. TODO
+Instructions to reproduce results
+----------------------------------
+
+Prerequisites
+  - Mininet installed (tested on Ubuntu 20.04 / Linux 5.4)
+  - Python 3.8+
+  - iperf (v2), wget, ping  (all present on the Mininet VM image)
+  - matplotlib (installed automatically by run.sh if missing)
+
+Run the full experiment (both queue sizes, all plots):
+
+    sudo ./run.sh
+
+The script runs two 200-second Mininet experiments (q=20 and q=100) and
+produces the six required plots in the top-level directory:
+
+    buffer-q20.png   cwnd-q20.png   rtt-q20.png
+    buffer-q100.png  cwnd-q100.png  rtt-q100.png
+
+Raw data land in bb-q20/ and bb-q100/ respectively.
+
+Implementation notes
+--------------------
+The skeleton code assumed Python 2 and the tcp_probe kernel module, both of
+which are unavailable on this kernel (5.4.0-42-generic).  The following
+changes were made:
+
+  1. All scripts ported to Python 3 (xreadlines->iterate, map()->list(map()),
+     izip_longest->zip_longest, bytes.decode() for subprocess output, etc.)
+
+  2. http/webserver.py ported from SimpleHTTPServer/SocketServer to
+     http.server/socketserver.
+
+  3. tcp_probe replaced by polling "ss -i dst :5001" inside h1's network
+     namespace every 100 ms (start_cwnd_monitor in bufferbloat.py).
+     Output format: unix_timestamp,cwnd_in_segments.
+     plot_tcpprobe.py was rewritten to parse this format.
+
+  4. curl replaced by wget (curl binary not installed on the VM image).
+
+Topology
+--------
+  h1 -- (1 Gb/s, 10 ms) -- s0 -- (1.5 Mb/s, 10 ms, maxq pkts) -- h2
+
+  Two 10 ms netem links -> one-way propagation = 20 ms -> minimum RTT ~= 40 ms.
+
+Fetch time results
+------------------
+  Queue size 100:  avg = 6.30 s,  std = 2.44 s  (27 samples)
+  Queue size  20:  avg = 2.76 s,  std = 1.00 s  (48 samples)
+
+
+Answers to questions
+--------------------
+
+Q1. Why do you see a difference in webpage fetch times with short and large
+    router buffers?
+
+    With a large buffer (q=100) the long-lived iperf flow fills the buffer
+    completely before TCP backs off.  A small web-page fetch must wait behind
+    ~100 packets x 8 ms/packet ~= 800 ms of additional queuing delay for every
+    round-trip, stretching fetch times to 6-10 s on average.  With a small
+    buffer (q=20) the queue holds at most ~160 ms of extra delay, so short
+    flows see much lower queuing time (avg ~= 2.8 s) and the long-lived flow
+    is forced to back off more frequently, keeping latency manageable.
+
+Q2. What is the transmit queue length on the NIC reported by ifconfig?
+    For a 100 Mb/s drain rate, what is the maximum wait time?
+
+    "ifconfig eth0" reports:  txqueuelen 1000
+
+    Maximum wait time at 100 Mb/s:
+        1000 packets x 1500 bytes/packet x 8 bits/byte
+        ----------------------------------------------- = 0.12 s = 120 ms
+                  100,000,000 bits/s
+
+Q3. How does the RTT reported by ping vary with queue size?
+    Give a symbolic equation.
+
+    Each packet queued at the bottleneck (rate C, MTU bytes) adds MTU*8/C
+    seconds of additional delay.  With q packets in the queue:
+
+        RTT(q) = RTT_prop + q * (MTU * 8) / C
+
+    where
+        RTT_prop  = minimum (propagation) RTT  ~= 40 ms in our setup
+        MTU       = 1500 bytes
+        C         = 1.5 Mb/s = 1,500,000 b/s
+        q         = current queue occupancy (packets)
+
+    So each additional queued packet adds ~8 ms of delay.
+
+    Expected maxima:
+        q=100 -> RTT_max ~= 40 + 100*8 = 840 ms
+        q=20  -> RTT_max ~= 40 +  20*8 = 200 ms
+
+    Observed maxima were roughly double (~1500 ms and ~417 ms), consistent
+    with TCLink applying maxq to both ends of the slow link (s0-eth2 and
+    h2-eth0), effectively doubling the bottleneck buffer.
+
+Q4. Identify and describe two ways to mitigate the bufferbloat problem.
+
+    1. Active Queue Management (AQM) -- algorithms such as CoDel (Controlled
+       Delay) or FQ-CoDel measure actual sojourn time of packets in the queue
+       and drop/ECN-mark packets early when delay exceeds a target (e.g. 5 ms).
+       This keeps the buffer shallow without requiring smaller static limits,
+       preserving throughput while bounding latency.
+
+    2. Smaller static buffer sizes -- setting queue limits close to the
+       bandwidth-delay product (BDP = C * RTT_prop ~= 7.5 kB ~= 5 packets at
+       1.5 Mb/s / 40 ms) prevents the buffer from accumulating more data than
+       the network can absorb in one RTT.  Short flows (web pages) experience
+       much lower latency; the trade-off is more frequent drops for long-lived
+       flows, which causes more TCP retransmissions.

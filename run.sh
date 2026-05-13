@@ -4,11 +4,14 @@
 set -e
 cd "$(dirname "$0")"
 
+# Ensure matplotlib is available under sudo/root.
+python3 -c "import matplotlib" 2>/dev/null || pip3 install matplotlib
+
 time=200
 bwnet=1.5
-# Each link gets 10 ms of one-way delay → two links → 20 ms one-way → ~40 ms RTT.
-# (The assignment states 20 ms min RTT; the two-link path doubles to ~40 ms.
-#  See README for details.)
+# Each link carries 10 ms of one-way netem delay.
+# With two links (h1→s0, s0→h2), one-way propagation = 20 ms → min RTT ≈ 40 ms.
+# See README Q3 for the RTT derivation.
 delay=10
 
 iperf_port=5001
@@ -16,9 +19,10 @@ iperf_port=5001
 for qsize in 20 100; do
     dir=bb-q$qsize
 
-    echo "=== Running experiment: qsize=$qsize, dir=$dir ==="
-    sudo mn -c 2>/dev/null || true
+    echo "=== Cleaning previous Mininet state ==="
+    mn -c 2>/dev/null || true
 
+    echo "=== Running experiment: qsize=$qsize, dir=$dir ==="
     python3 bufferbloat.py \
         --bw-host 1000 \
         --bw-net  $bwnet \
@@ -28,8 +32,10 @@ for qsize in 20 100; do
         --maxq    $qsize \
         --cong    reno
 
-    echo "=== Generating plots for qsize=$qsize ==="
+    # The experiment dirs are owned by root; make them world-readable for plotting.
+    chown -R "$(logname):$(logname)" "$dir" 2>/dev/null || true
 
+    echo "=== Generating plots for qsize=$qsize ==="
     python3 plot_tcpprobe.py -f $dir/cwnd.txt \
         -o $dir/cwnd-iperf.png -p $iperf_port
 
@@ -39,7 +45,7 @@ for qsize in 20 100; do
     python3 plot_ping.py -f $dir/ping.txt \
         -o $dir/rtt.png
 
-    # Copy plots to top-level directory with required submission names.
+    # Copy to top-level with required submission names.
     cp $dir/cwnd-iperf.png cwnd-q${qsize}.png
     cp $dir/q.png          buffer-q${qsize}.png
     cp $dir/rtt.png        rtt-q${qsize}.png
