@@ -1,5 +1,5 @@
 '''
-Plot ping RTTs over time
+Plot ping RTTs over time. (Ported to Python 3)
 '''
 from helper import *
 import plot_defaults
@@ -21,7 +21,7 @@ parser.add_argument('--freq',
 
 parser.add_argument('--out', '-o',
                     help="Output png file for the plot.",
-                    default=None) # Will show the plot
+                    default=None)
 
 args = parser.parse_args()
 
@@ -47,10 +47,10 @@ fig = figure()
 ax = fig.add_subplot(111)
 for i, f in enumerate(args.files):
     data = parse_ping(f)
-    xaxis = map(float, col(0, data))
+    xaxis = list(map(float, col(0, data)))
     start_time = xaxis[0]
-    xaxis = map(lambda x: (x - start_time) / args.freq, xaxis)
-    qlens = map(float, col(1, data))
+    xaxis = list(map(lambda x: (x - start_time) / args.freq, xaxis))
+    qlens = list(map(float, col(1, data)))
 
     ax.plot(xaxis, qlens, lw=2)
     ax.xaxis.set_major_locator(MaxNLocator(4))
