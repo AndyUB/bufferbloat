@@ -1,5 +1,5 @@
 '''
-Plot queue occupancy over time. (Ported to Python 3)
+Plot queue occupancy over time.
 '''
 from helper import *
 import plot_defaults

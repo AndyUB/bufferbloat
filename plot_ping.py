@@ -1,5 +1,5 @@
 '''
-Plot ping RTTs over time. (Ported to Python 3)
+Plot ping RTTs over time.
 '''
 from helper import *
 import plot_defaults
