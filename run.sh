@@ -9,10 +9,10 @@ python3 -c "import matplotlib" 2>/dev/null || pip3 install matplotlib
 
 time=200
 bwnet=1.5
-# Each link carries 10 ms of one-way netem delay.
-# With two links (h1→s0, s0→h2), one-way propagation = 20 ms → min RTT ≈ 40 ms.
-# See README Q3 for the RTT derivation.
-delay=10
+# Each link carries 5 ms of one-way netem delay.
+# With two links (h1→s0, s0→h2), each with delay applied at both ends:
+#   one-way = 5+5 = 10 ms  →  min RTT = 20 ms  (matches spec).
+delay=5
 
 iperf_port=5001
 
