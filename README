@@ -1,127 +1,58 @@
 CSE 550 Problem Set 2 — Bufferbloat
 ====================================
 
-Instructions to reproduce results
-----------------------------------
+Reproduction
+------------
+Environment: Ubuntu 20.04 Mininet VM (Linux 5.4.0-42-generic, Python 3.8).
 
-Prerequisites
-  - Mininet installed (tested on Ubuntu 20.04 / Linux 5.4)
-  - Python 3.8+
-  - iperf (v2), wget, ping  (all present on the Mininet VM image)
-  - matplotlib (installed automatically by run.sh if missing)
+The skeleton code assumed Python 2 and the tcp_probe kernel module (removed in
+Linux 4.16+). Scripts were ported to Python 3, tcp_probe was replaced by
+polling "ss -i dst :5001" every 100 ms inside h1's network namespace, and curl
+was replaced by wget (not installed on the VM image).
 
-Run the full experiment (both queue sizes, all plots):
+To run both experiments (q=20 and q=100) and produce all six plots:
 
     sudo ./run.sh
 
-The script runs two 200-second Mininet experiments (q=20 and q=100) and
-produces the six required plots in the top-level directory:
-
-    buffer-q20.png   cwnd-q20.png   rtt-q20.png
-    buffer-q100.png  cwnd-q100.png  rtt-q100.png
-
-Raw data land in bb-q20/ and bb-q100/ respectively.
-
-Implementation notes
---------------------
-The skeleton code assumed Python 2 and the tcp_probe kernel module, both of
-which are unavailable on this kernel (5.4.0-42-generic).  The following
-changes were made:
-
-  1. All scripts ported to Python 3 (xreadlines->iterate, map()->list(map()),
-     izip_longest->zip_longest, bytes.decode() for subprocess output, etc.)
-
-  2. http/webserver.py ported from SimpleHTTPServer/SocketServer to
-     http.server/socketserver.
-
-  3. tcp_probe replaced by polling "ss -i dst :5001" inside h1's network
-     namespace every 100 ms (start_cwnd_monitor in bufferbloat.py).
-     Output format: unix_timestamp,cwnd_in_segments.
-     plot_tcpprobe.py was rewritten to parse this format.
-     Qualitative results are equivalent: 100 ms granularity is sufficient to
-     capture the sawtooth over a 200-second experiment at 1.5 Mb/s.
-
-  4. curl replaced by wget (curl binary not installed on the VM image).
-     Both tools block until the full HTTP response body is received, so the
-     wall-clock time around h2.cmd("wget ...") measures the same quantity as
-     curl -w %{time_total}.
-
-Topology
---------
-  h1 -- (1 Gb/s, 5 ms) -- s0 -- (1.5 Mb/s, 5 ms, maxq pkts) -- h2
-
-  Mininet's TCLink applies the delay to all four interface egresses:
-    h1-eth0 (5 ms) + s0-eth2 (5 ms) = 10 ms one-way  ->  min RTT = 20 ms.
-  Verified: idle ping gives 20.3 ms minimum RTT.
-
-  Note: TCLink also applies the 1.5 Mb/s rate limit and maxq buffer to
-  h2-eth0 (the return-path interface), so the effective bottleneck buffer is
-  present on both ends of the slow link.  The RTT formula in Q3 accounts for
-  this two-queue setup.
-
-Fetch time results
-------------------
-  Queue size 100:  avg = 8.91 s,  std = 4.37 s  (21 samples)
-  Queue size  20:  avg = 2.89 s,  std = 0.69 s  (45 samples)
-
-
-Answers to questions
+Answers to Questions
 --------------------
 
 Q1. Why do you see a difference in webpage fetch times with short and large
     router buffers?
 
-    With a large buffer (q=100) the long-lived iperf flow fills the buffer
-    completely before TCP backs off.  A short HTTP fetch must wait behind the
-    backlog on every round-trip, suffering ~800 ms of extra queuing delay per
-    RTT, which stretches fetch times to 9-14 s on average.  With a small
-    buffer (q=20) the maximum queuing delay is ~160 ms per queue, so short
-    flows experience far less latency (avg ~= 2.9 s) and the long-lived flow
-    is forced to back off more frequently, keeping the queue from staying full.
+    With a large buffer (q=100) the long-lived iperf flow fills the queue before
+    TCP backs off, forcing short HTTP fetches to wait behind the backlog on every
+    RTT (~800 ms extra queuing delay per round trip), stretching fetch times to
+    ~8.6 s on average. With a small buffer (q=20) maximum queuing delay is
+    ~160 ms per queue, so short flows finish in ~2.7 s on average.
 
 Q2. What is the transmit queue length on the NIC reported by ifconfig?
     For a 100 Mb/s drain rate, what is the maximum wait time?
 
-    "ifconfig eth0" reports:  txqueuelen 1000
-
-    Maximum wait time at 100 Mb/s:
-        1000 packets x 1500 bytes/packet x 8 bits/byte
-        ----------------------------------------------- = 0.12 s = 120 ms
-                  100,000,000 bits/s
+    ifconfig eth0 reports txqueuelen 1000.
+    Maximum wait = 1000 × 1500 B × 8 / 100,000,000 b/s = 0.12 s (120 ms).
 
 Q3. How does the RTT reported by ping vary with queue size?
     Give a symbolic equation.
 
-    Each packet queued at the bottleneck (rate C, MTU bytes) adds MTU*8/C
-    seconds of delay.  Mininet's TCLink puts a rate-limited, maxq-packet buffer
-    on both s0-eth2 (data path) and h2-eth0 (return path), so the full RTT is:
+        RTT(q) = RTT_prop + 2 × q × (MTU × 8 / C)
 
-        RTT(q) = RTT_prop + 2 * q * (MTU * 8) / C
+    RTT_prop = 20 ms (minimum RTT), MTU = 1500 B, C = 1.5 Mb/s, q = queue
+    occupancy in packets. The factor of 2 arises because TCLink places the
+    rate-limited buffer on both the forward and return path interfaces.
 
-    where
-        RTT_prop  = minimum (propagation) RTT = 20 ms
-        MTU       = 1500 bytes
-        C         = 1.5 Mb/s = 1,500,000 b/s
-        q         = current queue occupancy in packets (same limit on both ends)
-
-    Each additional queued packet adds ~16 ms to the round-trip (8 ms forward +
-    8 ms return).
-
-    Expected maxima:
-        q=100 -> RTT_max ~= 20 + 2*100*8 = 1620 ms  (observed ~1518 ms)
-        q=20  -> RTT_max ~= 20 + 2* 20*8 =  340 ms  (observed  ~349 ms)
+    Expected maxima: q=100 → ~1620 ms (observed ~1518 ms);
+                     q=20  → ~340 ms  (observed ~349 ms).
 
 Q4. Identify and describe two ways to mitigate the bufferbloat problem.
 
-    1. Active Queue Management (AQM) -- algorithms such as CoDel (Controlled
-       Delay) or FQ-CoDel measure actual sojourn time of packets in the queue
-       and drop/ECN-mark packets early when delay exceeds a target (e.g. 5 ms).
-       This keeps the buffer shallow without requiring smaller static limits,
-       preserving throughput while bounding latency.
+    1. Explicit Congestion Notification (ECN) — routers mark packets with a
+       congestion signal in the IP header instead of dropping them once the
+       queue exceeds a threshold. ECN-aware TCP senders reduce their rate before
+       the buffer fills, keeping queues shallow without the throughput loss of
+       drops.
 
-    2. Smaller static buffer sizes -- setting queue limits close to the
-       bandwidth-delay product (BDP = C * RTT_prop = 3750 bytes ~= 2-3 packets
-       at 1.5 Mb/s / 20 ms) prevents the buffer from accumulating more data
-       than the network can absorb in one RTT.  Short flows (web pages)
-       experience much lower latency; the trade-off is more frequent drops for
-       long-lived flows, which causes more TCP retransmissions.
+    2. TCP BBR (Bottleneck Bandwidth and RTT) — instead of reacting to loss,
+       BBR probes for available bandwidth and minimum RTT, then paces sends to
+       match the bottleneck rate. By avoiding buffer filling altogether, BBR
+       keeps standing queues near zero while sustaining high throughput.
