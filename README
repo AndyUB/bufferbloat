@@ -5,11 +5,6 @@ Reproduction
 ------------
 Environment: Ubuntu 20.04 Mininet VM (Linux 5.4.0-42-generic, Python 3.8).
 
-The skeleton code assumed Python 2 and the tcp_probe kernel module (removed in
-Linux 4.16+). Scripts were ported to Python 3, tcp_probe was replaced by
-polling "ss -i dst :5001" every 100 ms inside h1's network namespace, and curl
-was replaced by wget (not installed on the VM image).
-
 To run both experiments (q=20 and q=100) and produce all six plots:
 
     sudo ./run.sh
@@ -21,10 +16,11 @@ Q1. Why do you see a difference in webpage fetch times with short and large
     router buffers?
 
     With a large buffer (q=100) the long-lived iperf flow fills the queue before
-    TCP backs off, forcing short HTTP fetches to wait behind the backlog on every
-    RTT (~800 ms extra queuing delay per round trip), stretching fetch times to
-    ~8.6 s on average. With a small buffer (q=20) maximum queuing delay is
-    ~160 ms per queue, so short flows finish in ~2.7 s on average.
+    TCP backs off, forcing short HTTP fetches to wait behind a larger backlog.
+    At 1.5 Mb/s, a full 100-packet queue adds about 800 ms of serialization
+    delay, stretching fetch times to 8.647 s on average. With a small buffer
+    (q=20), a full queue adds about 160 ms, so short flows finish in 2.713 s on
+    average.
 
 Q2. What is the transmit queue length on the NIC reported by ifconfig?
     For a 100 Mb/s drain rate, what is the maximum wait time?
@@ -35,14 +31,19 @@ Q2. What is the transmit queue length on the NIC reported by ifconfig?
 Q3. How does the RTT reported by ping vary with queue size?
     Give a symbolic equation.
 
-        RTT(q) = RTT_prop + 2 × q × (MTU × 8 / C)
+        RTT = RTT_base + (q_forward + q_reverse) × (MTU × 8 / C)
 
-    RTT_prop = 20 ms (minimum RTT), MTU = 1500 B, C = 1.5 Mb/s, q = queue
-    occupancy in packets. The factor of 2 arises because TCLink places the
+    RTT_base = 20 ms (minimum RTT), MTU = 1500 B, C = 1.5 Mb/s, and q_forward
+    and q_reverse are bottleneck queue occupancies in packets. If both directions
+    have about q packets queued, this becomes:
+
+        RTT(q) ≈ RTT_base + 2 × q × (MTU × 8 / C)
+
+    The factor of 2 is an upper-bound case because TCLink applies the
     rate-limited buffer on both the forward and return path interfaces.
 
-    Expected maxima: q=100 → ~1620 ms (observed ~1518 ms);
-                     q=20  → ~340 ms  (observed ~349 ms).
+    Expected upper bounds: q=100 -> ~1620 ms (observed max 1474 ms);
+                           q=20  -> ~340 ms  (observed max 387 ms).
 
 Q4. Identify and describe two ways to mitigate the bufferbloat problem.
 
@@ -52,7 +53,8 @@ Q4. Identify and describe two ways to mitigate the bufferbloat problem.
        the buffer fills, keeping queues shallow without the throughput loss of
        drops.
 
-    2. TCP BBR (Bottleneck Bandwidth and RTT) — instead of reacting to loss,
-       BBR probes for available bandwidth and minimum RTT, then paces sends to
-       match the bottleneck rate. By avoiding buffer filling altogether, BBR
-       keeps standing queues near zero while sustaining high throughput.
+    2. TCP BBR (Bottleneck Bandwidth and Round-trip propagation time) — instead
+       of reacting to loss, BBR probes for available bandwidth and minimum RTT,
+       then paces sends to match the bottleneck rate. By avoiding buffer filling
+       altogether, BBR keeps standing queues near zero while sustaining high
+       throughput.
